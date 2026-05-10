@@ -9,7 +9,7 @@ class EscaladaVectorStore:
     def __init__(self):
         self.embeddings = OllamaEmbeddings(
             model="mxbai-embed-large",
-            base_url="http://localhost:11434"
+            base_url="http://localhost:11434",
         )
         
         self.vectorstore = Chroma(

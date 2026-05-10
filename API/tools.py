@@ -4,6 +4,7 @@ import time
 import json
 import requests
 import cloudscraper
+import pandas as pd
 from bs4 import BeautifulSoup
 from langchain.tools import tool
 from dotenv import load_dotenv
@@ -320,3 +321,48 @@ def guardar_plan_escalada(plan_json: str) -> str:
 
     except Exception as e:
         return f"❌ Error al guardar el plan en la base de datos: {str(e)}"
+    
+
+# ─────────────────────────────────────────────────────────────
+# TOOL 5: Buscar vías en el CSV local
+# ─────────────────────────────────────────────────────────────
+@tool
+def buscar_vias_local(zona: str) -> str:
+    """
+    Busca vías de escalada en la base de datos local (CSV) filtrando por zona (crag) o sector.
+    Devuelve las 10 mejores vías de la zona ordenadas por popularidad.
+    Úsala cuando el usuario pregunte por recomendaciones de vías o sectores en España.
+    """
+    ruta_csv = "vias_espania_8anu.csv"
+    if not os.path.exists(ruta_csv):
+        return "El archivo CSV de vías no existe en el sistema."
+
+    try:
+        # Leemos el CSV
+        df = pd.read_csv(ruta_csv)
+        
+        # Filtramos por la zona (crag) ignorando mayúsculas/minúsculas
+        filtro = df[df['crag'].str.contains(zona, case=False, na=False) | 
+                    df['sector'].str.contains(zona, case=False, na=False)]
+        
+        if filtro.empty:
+            return f"No se encontraron vías locales para la zona o sector '{zona}'."
+        
+        # Limpiamos la columna de ascensos (viene con espacios ej: "1 078") y la pasamos a número
+        filtro['ascensos_num'] = filtro['ascensos'].astype(str).str.replace(' ', '', regex=False).apply(pd.to_numeric, errors='coerce')
+        
+        # Ordenamos para mostrar las más populares primero
+        top_vias = filtro.sort_values(by='ascensos_num', ascending=False).head(10)
+        
+        # Construimos la respuesta para el bot
+        resumen = f"🧗 Vías más populares encontradas en {zona} (CSV local):\n"
+        for _, row in top_vias.iterrows():
+            resumen += (
+                f"- Vía: '{row['nombre']}' | Grado: {row['grado']} | Sector: {row['sector']} | "
+                f"Estrellas: {row['estrellas']} | Lat/Lon: {row['lat']},{row['lon']}\n"
+            )
+        
+        return resumen
+
+    except Exception as e:
+        return f"Error al procesar el CSV local: {str(e)}"

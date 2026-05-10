@@ -45,13 +45,18 @@ def cargar_pdfs():
 
     # 2. CHUNKING (Fragmentación)
     # Dividimos el texto en trozos para que el modelo pueda procesarlos mejor
-    splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=100)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50
+    )
     chunks = splitter.split_documents(docs_pdf)
     print(f"   ✓ Creados {len(chunks)} fragmentos.")
 
     # 3. VECTORIZACIÓN E INGESTA EN CHROMADB
     print(f"\n── Indexando en ChromaDB: {CHROMA_PATH} ──")
-    embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+    embeddings = OllamaEmbeddings(
+        model="mxbai-embed-large"
+    )
     
     vectorstore = Chroma.from_documents(
         documents=chunks,
