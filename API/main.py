@@ -52,11 +52,29 @@ def health():
 async def chat_endpoint(request: ChatRequest):
     """Envía un mensaje al agente de escalada y devuelve su respuesta."""
     try:
+        # Ejecutamos el agente
         response = agente_escalada.invoke({"input": request.message})
+        
+        # Si todo va bien, devolvemos la respuesta de la IA
         return {"response": response["output"]}
+        
     except Exception as e:
-        print(f"Error en el agente: {e}")
-        raise HTTPException(status_code=500, detail="La IA tuvo un problema procesando tu mensaje.")
+        # Imprimimos el error real en la consola para depurar
+        print(f"⚠️ Error detectado en el agente: {e}")
+        
+        # Verificamos si es un error de formato (Parsing)
+        # Esto ocurre cuando el modelo olvida poner "Final Answer:"
+        error_str = str(e)
+        if "Could not parse LLM output" in error_str:
+            # Intentamos extraer lo que el modelo escribió antes de fallar
+            # A veces el texto útil está dentro del error
+            intentar_recuperar = error_str.split("`")[-2] if "`" in error_str else "Me he liado un poco con el formato, pero casi lo tengo. ¿Podrías repetirme la última instrucción?"
+            return {"response": intentar_recuperar}
+        
+        # Si es otro tipo de error, devolvemos un mensaje controlado en lugar de un 500
+        return {
+            "response": "Lo siento, he tenido un problema técnico interno. ¿Podemos intentarlo de nuevo?"
+        }
 
 
 @app.get("/planes", tags=["Planes"])

@@ -32,7 +32,7 @@ def configurar_agente():
     Tienes acceso a estas herramientas:
     {tools}
 
-    Usa SIEMPRE el siguiente formato:
+    Usa SIEMPRE el siguiente formato EXACTO (no te saltes ninguna palabra clave):
     Thought: ¿Necesito usar una herramienta? Sí
     Action: <nombre exacto de la herramienta de [{tool_names}]>
     Action Input: <parámetro de entrada>
@@ -41,8 +41,9 @@ def configurar_agente():
     Thought: Ahora tengo suficiente información real para responder
     Final Answer: <respuesta completa al usuario>
 
-    ⚠️ REGLAS ESTRICTAS CONTRA ALUCINACIONES:
-    - NO INVENTES: Si la herramienta no devuelve datos, informa al usuario.
+    ⚠️ REGLAS ESTRICTAS DE FORMATO:
+    - NUNCA respondas directamente al usuario. Siempre debes empezar tu respuesta final con "Final Answer: ".
+    - NUNCA inventes herramientas.
     - CLIMA: Usa `obtener_clima` con formato "latitud,longitud" extraídas de las vías.
     - BÚSQUEDA: Para buscar por nivel, usa el formato "Zona, Grado" (ej: "El Chorro, 6b").
     - JSON: Al usar `guardar_plan_escalada`, el Action Input debe ser un JSON plano y válido.
@@ -72,10 +73,10 @@ def configurar_agente():
         agent=agent,
         tools=tools,
         verbose=True,
-        handle_parsing_errors=True,
+        # Cambiamos True por un mensaje correctivo:
+        handle_parsing_errors="Error de formato. NUNCA respondas directamente. Debes usar 'Final Answer: <tu respuesta>' o 'Action: <herramienta>'.", 
         max_iterations=10,
         memory=memory
     )
-
 
 agente_escalada = configurar_agente()
