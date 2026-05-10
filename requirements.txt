@@ -12,3 +12,4 @@ beautifulsoup4>=4.13.5
 cloudscraper>=1.2.71
 python-dotenv>=1.0.0
 playwright>=1.59.0
+pypdf>=6.11.0

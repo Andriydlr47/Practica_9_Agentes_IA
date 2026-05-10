@@ -19,8 +19,8 @@ class Via:
     ascensos: str = ""
     estrellas: str = ""
     url: str = ""
-    lat: str = ""  # Nuevo campo
-    lon: str = ""  # Nuevo campo
+    lat: str = ""
+    lon: str = ""
 
 class Parser:
     @staticmethod
@@ -34,7 +34,12 @@ class Parser:
             partes = [p for p in href.split("/") if p]
             
             if "crags" in partes and len(partes) >= 4:
-                if any(x in href for x in ["/map", "/filter", "/edit", "/users"]):
+                # Filtros extraídos: evitamos mapas, filtros, y sobre todo SECTORES o VÍAS DIRECTAS
+                if any(x in href for x in ["/map", "/filter", "/edit", "/users", "/sectors", "gallery"]):
+                    continue
+                
+                # Si la URL tiene más de 5 partes, seguramente sea una vía individual, no una zona
+                if len(partes) > 5:
                     continue
                 
                 url_limpia = href.replace("/routes", "")
@@ -99,7 +104,6 @@ class Scraper8anu:
     async def extraer_coordenadas(self, page) -> tuple[str, str]:
         """Intenta extraer la latitud y longitud de la página principal del crag."""
         try:
-            # Esperamos hasta 5 segundos a que aparezca el div con las coordenadas
             coords_div = await page.wait_for_selector("div.coords", timeout=5000)
             if coords_div:
                 texto = await coords_div.inner_text()
@@ -107,7 +111,6 @@ class Scraper8anu:
                     lat, lon = [x.strip() for x in texto.split(",", 1)]
                     return lat, lon
         except Exception:
-            # Si no hay coordenadas o se agota el tiempo, devolvemos vacío
             pass
         return "", ""
 
@@ -119,71 +122,82 @@ class Scraper8anu:
             )
             page = await context.new_page()
 
-            # Bucle de paginación
+            # Bucle de paginación de las CRAGS (Zonas)
             for page_num in range(1, max_pages + 1):
-                # Construir URL con paginación
                 url_actual = f"{url_base}?page={page_num}" if page_num > 1 else url_base
+                log.info(f"📄 --- PROCESANDO PÁGINA {page_num} DE ZONAS --- ({url_actual})")
                 
-                log.info(f"📄 --- PROCESANDO PÁGINA {page_num} --- ({url_actual})")
-                await page.goto(url_actual, wait_until="networkidle")
-                await asyncio.sleep(2)
+                try:
+                    # Cambiado de networkidle a domcontentloaded para evitar Timeouts
+                    await page.goto(url_actual, wait_until="domcontentloaded", timeout=45000)
+                    await asyncio.sleep(4) # Damos margen para que los scripts de Vue.js rendericen el HTML
+                except Exception as e:
+                    log.error(f"Error cargando la página principal {page_num}: {e}")
+                    continue
                 
                 html_lista = await page.content()
                 links_crags = Parser.extraer_links_crags(html_lista, "https://www.8a.nu")
                 
                 if not links_crags:
-                    log.info("🏁 No se encontraron más zonas. Fin de la paginación.")
+                    log.info("🏁 No se encontraron más zonas. Fin de la paginación principal.")
                     break
                 
-                log.info(f"✅ {len(links_crags)} zonas detectadas en la página {page_num}.")
+                log.info(f"✅ {len(links_crags)} zonas reales detectadas en esta página.")
 
                 for i, link in enumerate(links_crags, 1):
-                    # 1. Visitar la página principal de la zona para extraer coordenadas
                     url_crag_overview = link["url"]
                     log.info(f"[{i}/{len(links_crags)}] 📍 Zona: {link['nombre']}")
                     
                     try:
-                        await page.goto(url_crag_overview, wait_until="domcontentloaded", timeout=30000)
+                        # 1. Extraer Coordenadas
+                        await page.goto(url_crag_overview, wait_until="domcontentloaded", timeout=45000)
                         lat, lon = await self.extraer_coordenadas(page)
                         if lat and lon:
-                            log.info(f"   🗺️ Coordenadas encontradas: {lat}, {lon}")
+                            log.info(f"   🗺️ Coordenadas: {lat}, {lon}")
                         else:
                             log.info("   🗺️ Sin coordenadas disponibles.")
 
-                        # 2. Visitar la página de rutas de esa misma zona
-                        url_crag_routes = f"{url_crag_overview}/routes"
-                        await page.goto(url_crag_routes, wait_until="domcontentloaded", timeout=30000)
-                        
-                        try:
-                            await page.wait_for_selector("table.zlags-table", timeout=8000)
-                        except:
-                            pass # Puede que no haya tabla de rutas
-                        
-                        await page.evaluate("window.scrollBy(0, 1000)")
-                        await asyncio.sleep(2)
+                        # 2. Bucle de Paginación para las RUTAS de esta zona
+                        page_route = 1
+                        while True:
+                            url_crag_routes = f"{url_crag_overview}/routes?page={page_route}" if page_route > 1 else f"{url_crag_overview}/routes"
+                            
+                            log.info(f"   🧗 Escaneando vías (Página {page_route})...")
+                            await page.goto(url_crag_routes, wait_until="domcontentloaded", timeout=45000)
+                            
+                            try:
+                                # Esperamos a que la tabla aparezca
+                                await page.wait_for_selector("table.zlags-table", timeout=8000)
+                            except:
+                                log.info(f"   🏁 Fin de vías para {link['nombre']}.")
+                                break # Si no hay tabla, no hay más páginas, rompemos el while
+                            
+                            await page.evaluate("window.scrollBy(0, 1000)")
+                            await asyncio.sleep(2)
 
-                        # Parsear las rutas pasándole lat y lon
-                        vias_zona = Parser.desde_html(await page.content(), link['nombre'], lat, lon)
-                        
-                        if vias_zona:
-                            log.info(f"   ✨ {len(vias_zona)} vías guardadas.")
-                            self.vias_total.extend(vias_zona)
-                        else:
-                            log.warning("   ❌ No se encontraron vías.")
+                            vias_zona_pagina = Parser.desde_html(await page.content(), link['nombre'], lat, lon)
+                            
+                            if vias_zona_pagina:
+                                log.info(f"      ✨ {len(vias_zona_pagina)} vías extraídas.")
+                                self.vias_total.extend(vias_zona_pagina)
+                                page_route += 1 # Pasamos a la siguiente página de rutas
+                            else:
+                                log.info(f"   🏁 Fin de vías para {link['nombre']}.")
+                                break # Si el parseador devuelve vacío, rompemos el while
 
                     except Exception as e:
                         log.error(f"   ❌ Error procesando {link['nombre']}: {e}")
                     
                     await asyncio.sleep(1) # Pausa por cortesía
 
-                # Guardado periódico tras completar cada página principal
+                # Guardado por cada página de zonas completada
                 self.guardar_csv()
 
             await browser.close()
 
     def guardar_csv(self):
         if self.vias_total:
-            archivo = "todas_las_vias_8anu.csv"
+            archivo = "vias_espania_8anu.csv"
             with open(archivo, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=asdict(self.vias_total[0]).keys())
                 writer.writeheader()
