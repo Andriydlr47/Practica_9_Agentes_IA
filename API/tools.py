@@ -7,9 +7,10 @@ import cloudscraper
 import pandas as pd
 from bs4 import BeautifulSoup
 from langchain.tools import tool
+from langchain_core.tools import tool
 from dotenv import load_dotenv
 from RAG.vectorstore import EscaladaVectorStore
-from API.database import get_connection, inicializar_db
+from API.database import get_connection, inicializar_db, insertar_plan_completo
 from langchain_ollama import ChatOllama
 from langchain_core.documents import Document
 
@@ -146,122 +147,37 @@ def obtener_clima(ciudad: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# TOOL 3: Buscar zona/ruta en theCrag en tiempo real
-# ─────────────────────────────────────────────────────────────
-@tool
-def buscar_en_8anu(query: str) -> str:
-    """
-    Busca zonas de escalada (crags) en 8a.nu. 
-    Traduce automáticamente la consulta al inglés para mejorar resultados.
-    Si la zona es nueva, la guarda en la base de datos local.
-    """
-    # 1. TRADUCCIÓN INTERNA (Español -> Inglés)
-    # Usamos una instancia rápida de Ollama para asegurar que buscamos en inglés
-    try:
-        llm_translator = ChatOllama(model="gemma4:26b", temperature=0) # O el modelo que prefieras
-        query_en = llm_translator.invoke(f"Translate only the location name to English: {query}").content.strip()
-    except:
-        query_en = query # Fallback si falla la traducción
-
-    base_url = "https://www.8a.nu/api"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://www.8a.nu",
-        "Referer": "https://www.8a.nu/"
-    }
-
-    try:
-        # 2. BÚSQUEDA EN API
-        response = requests.get(f"{base_url}/search?query={query_en}", headers=headers, timeout=10)
-        data = response.json()
-        crags = data.get("crags", {}).get("items", [])
-        
-        if not crags:
-            return f"No se encontró información para '{query}' (buscado como '{query_en}') en 8a.nu."
-
-        target = crags[0]
-        slug = target.get("slug")
-        
-        # 3. OBTENER SECTORES
-        s_resp = requests.get(f"{base_url}/crags/{slug}/sectors", headers=headers, timeout=10)
-        sectors = s_resp.json().get("items", [])
-        
-        # 4. CONSTRUIR CONTENIDO
-        texto_contenido = f"ZONA DE ESCALADA: {target.get('name')}\n"
-        texto_contenido += f"UBICACIÓN: {target.get('city')}, {target.get('country')}\n"
-        texto_contenido += "SECTORES:\n"
-        for s in sectors:
-            texto_contenido += f"- {s['name']} ({s['routesCount']} vías)\n"
-
-        # 5. AUTO-INGESTA EN CHROMADB (Si tenemos conexión a vector_db)
-        if vector_db:
-            metadatos = _metadatos_seguros({
-                "source": f"https://www.8a.nu/crags/climbing/{slug}",
-                "type": "8a.nu",
-                "nombre": target.get("name"),
-                "lat": target.get("latitude"),
-                "lon": target.get("longitude")
-            })
-            vector_db.añadir_documento(texto_contenido, metadatos)
-
-        # 6. RETORNAR RESPUESTA AL AGENTE
-        resumen = f"📍 Encontrado: **{target.get('name')}** en {target.get('country')}\n"
-        resumen += f"Sectores principales: {', '.join([s['name'] for s in sectors[:5]])}\n"
-        return resumen
-
-    except Exception as e:
-        return f"Error técnico en la búsqueda: {str(e)}"
-    
-
-# ─────────────────────────────────────────────────────────────
-# TOOL 4: Guardar plan de escalada en BD
+# TOOL 3: Guardar plan de escalada en BD
 # ─────────────────────────────────────────────────────────────
 @tool
 def guardar_plan_escalada(plan_json: str) -> str:
     """
     Guarda un plan de escalada completo en la base de datos local SQLite.
-    
-    El argumento plan_json debe ser un JSON estructurado con datos obtenidos de 8a.nu y el clima:
-    {
-      "nombre_plan": "Escalada en Siurana",
-      "fecha": "2024-05-20",
-      "zona_principal": "Siurana",
-      "lat": 41.258,
-      "lon": 0.932,
-      "clima": "Despejado",
-      "temperatura": 22.0,
-      "viento": 5.0,
-      "dificultad_rango": "6b - 7a",
-      "notas": "Llevar cuerda de 80m y muchas cintas.",
-      "vias": [
-        {
-          "nombre_via": "L'Anella",
-          "zona": "Siurana",
-          "sector": "Esperó Primavera",
-          "dificultad": "6b+",
-          "longitud_m": 30,
-          "num_chapas": 12,
-          "lat": 41.259,
-          "lon": 0.933,
-          "advertencias": "Asegurar bien el primer aleje",
-          "fotos_urls": "",
-          "url_fuente": "https://www.8a.nu/crags/climbing/siurana/..."
-        }
-      ]
-    }
     """
     try:
-        # 1. Parsear y limpiar el JSON
+        # 1. LIMPIEZA EXTREMA DEL STRING JSON
+        # Los LLMs a veces envuelven el JSON en etiquetas markdown (```json ... ```)
+        plan_json = plan_json.strip()
+        if plan_json.startswith("```json"):
+            plan_json = plan_json[7:]
+        if plan_json.startswith("```"):
+            plan_json = plan_json[3:]
+        if plan_json.endswith("```"):
+            plan_json = plan_json[:-3]
+        plan_json = plan_json.strip()
+
+        # 2. Parsear el JSON
         try:
             data = json.loads(plan_json)
         except json.JSONDecodeError:
-            # Fallback por si el LLM envía comillas simples o formato mal formado
+            # Fallback por si el LLM envía comillas simples en lugar de dobles
             data = json.loads(plan_json.replace("'", '"'))
 
+        # 3. Conexión a la BD
         conn = get_connection() # Ya incluye el PRAGMA foreign_keys = ON
         cursor = conn.cursor()
 
-        # 2. Insertar en la tabla 'planes_escalada'
+        # 4. Insertar en la tabla 'planes_escalada'
         cursor.execute('''
             INSERT INTO planes_escalada
               (nombre_plan, fecha, zona_principal, lat, lon,
@@ -269,8 +185,8 @@ def guardar_plan_escalada(plan_json: str) -> str:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data.get("nombre_plan", "Nuevo Plan"),
-            data.get("fecha", ""),
-            data.get("zona_principal", ""),
+            data.get("fecha", "Sin fecha especificada"),
+            data.get("zona_principal", "Desconocida"),
             data.get("lat"),
             data.get("lon"),
             data.get("clima", ""),
@@ -281,7 +197,7 @@ def guardar_plan_escalada(plan_json: str) -> str:
         ))
         plan_id = cursor.lastrowid
 
-        # 3. Insertar las vías asociadas en 'vias_plan'
+        # 5. Insertar las vías asociadas en 'vias_plan'
         vias = data.get("vias", [])
         for via in vias:
             # Manejo de fotos (si vienen en lista, convertir a string separado por ;)
@@ -297,7 +213,7 @@ def guardar_plan_escalada(plan_json: str) -> str:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 plan_id,
-                via.get("nombre_via", "Vía"),
+                via.get("nombre_via", "Vía sin nombre"),
                 via.get("zona", data.get("zona_principal", "")),
                 via.get("sector", ""),
                 via.get("dificultad", ""),
@@ -307,7 +223,7 @@ def guardar_plan_escalada(plan_json: str) -> str:
                 via.get("lon"),
                 via.get("advertencias", ""),
                 fotos,
-                via.get("url_fuente", ""), # Mapeamos 'url_fuente' (8a.nu) al campo de la DB
+                via.get("url_fuente", via.get("thecrag_url", "")), # Acepta tanto url_fuente como thecrag_url
             ))
 
         conn.commit()
@@ -321,10 +237,10 @@ def guardar_plan_escalada(plan_json: str) -> str:
 
     except Exception as e:
         return f"❌ Error al guardar el plan en la base de datos: {str(e)}"
-    
+
 
 # ─────────────────────────────────────────────────────────────
-# TOOL 5: Buscar vías en el CSV local
+# TOOL 4: Buscar vías en el CSV local
 # ─────────────────────────────────────────────────────────────
 @tool
 def buscar_vias_local(zona: str) -> str:
@@ -332,8 +248,20 @@ def buscar_vias_local(zona: str) -> str:
     Busca vías de escalada en la base de datos local (CSV) filtrando por zona (crag) o sector.
     Devuelve las 10 mejores vías de la zona ordenadas por popularidad.
     Úsala cuando el usuario pregunte por recomendaciones de vías o sectores en España.
+    Tambien puedes ordenarlas por su dificultad.
     """
-    ruta_csv = "vias_espania_8anu.csv"
+    print(zona)
+
+    # 1. Obtenemos la carpeta donde está ESTE archivo (tools.py)
+    directorio_actual = os.path.dirname(os.path.abspath(__file__))
+    
+    # 2. Construimos la ruta hacia el CSV subiendo un nivel y entrando en RAG
+    # Esto equivale a: Carpeta_Raiz / RAG / archivo.csv
+    ruta_csv = os.path.join(directorio_actual, "..", "RAG", "vias_espania_8anu_limpio.csv")
+    
+    # Normalizamos la ruta (quita los ".." para que sea una ruta limpia)
+    ruta_csv = os.path.normpath(ruta_csv)
+
     if not os.path.exists(ruta_csv):
         return "El archivo CSV de vías no existe en el sistema."
 
