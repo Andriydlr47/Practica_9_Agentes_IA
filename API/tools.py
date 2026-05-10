@@ -57,34 +57,43 @@ def consultar_manual_tecnico(query: str) -> str:
 # TOOL 2: Obtener clima (actual + pronóstico 5 días)
 # ─────────────────────────────────────────────────────────────
 @tool
-def obtener_clima(ciudad: str) -> str:
+def obtener_clima(coordenadas: str) -> str:
     """
-    Consulta el clima actual y el pronóstico de los próximos 5 días para una ubicación.
-    Esencial para planificar salidas de escalada y verificar si la roca estará seca.
-    Devuelve temperatura, descripción, viento y pronóstico diario.
+    Consulta el clima actual y el pronóstico de 5 días usando LATITUD y LONGITUD.
+    El parámetro de entrada DEBE ser un string con el formato exacto: "latitud,longitud" (ejemplo: "36.916960,-4.757770").
+    Nunca inventes las coordenadas, extráelas de los resultados de buscar_vias_local.
     """
     api_key = os.getenv("OPENWEATHER_API_KEY")
     if not api_key:
         return "Error: Falta OPENWEATHER_API_KEY en el archivo .env"
 
-    # Clima actual
+    try:
+        # Limpiar espacios y separar por coma
+        lat, lon = [coord.strip() for coord in coordenadas.split(",")]
+    except ValueError:
+        return "Error de formato. El Action Input para el clima DEBE ser 'latitud,longitud'."
+
+    # URLs actualizadas para usar latitud y longitud
     url_actual = (
         f"http://api.openweathermap.org/data/2.5/weather"
-        f"?q={ciudad}&appid={api_key}&units=metric&lang=es"
+        f"?lat={lat}&lon={lon}&appid={api_key}&units=metric&lang=es"
     )
-    # Pronóstico 5 días
     url_forecast = (
         f"http://api.openweathermap.org/data/2.5/forecast"
-        f"?q={ciudad}&appid={api_key}&units=metric&lang=es&cnt=40"
+        f"?lat={lat}&lon={lon}&appid={api_key}&units=metric&lang=es&cnt=40"
     )
 
     try:
         # ── Clima actual ──────────────────────────────────────
         r = requests.get(url_actual, timeout=10)
         data = r.json()
+        
         if data.get("cod") != 200:
-            return f"No se encontró información climática para: {ciudad}."
+            return f"No se encontró información climática para las coordenadas: {lat}, {lon}."
 
+        # OpenWeather suele devolver el nombre de la zona más cercana
+        nombre_zona = data.get("name", f"las coordenadas ({lat}, {lon})")
+        
         temp     = data["main"]["temp"]
         temp_min = data["main"]["temp_min"]
         temp_max = data["main"]["temp_max"]
@@ -94,7 +103,7 @@ def obtener_clima(ciudad: str) -> str:
         lluvia   = data.get("rain", {}).get("1h", 0)
 
         resumen = (
-            f"🌤️ Clima actual en {ciudad}:\n"
+            f"🌤️ Clima actual en {nombre_zona}:\n"
             f"  • {desc}\n"
             f"  • Temperatura: {temp}°C (mín {temp_min}°C / máx {temp_max}°C)\n"
             f"  • Humedad: {humedad}%\n"
@@ -113,7 +122,7 @@ def obtener_clima(ciudad: str) -> str:
         # ── Pronóstico ────────────────────────────────────────
         r2 = requests.get(url_forecast, timeout=10)
         fc = r2.json()
-        if fc.get("cod") == "200":
+        if str(fc.get("cod")) == "200":
             dias = {}
             for item in fc["list"]:
                 dia = item["dt_txt"].split(" ")[0]
@@ -152,40 +161,33 @@ def obtener_clima(ciudad: str) -> str:
 @tool
 def guardar_plan_escalada(plan_json: str) -> str:
     """
-    Guarda un plan de escalada completo en la base de datos local SQLite.
+    Guarda un plan de escalada completo. El input debe ser un JSON string.
     """
     try:
-        # 1. LIMPIEZA EXTREMA DEL STRING JSON
-        # Los LLMs a veces envuelven el JSON en etiquetas markdown (```json ... ```)
+        # 1. Limpieza de markdown
         plan_json = plan_json.strip()
-        if plan_json.startswith("```json"):
-            plan_json = plan_json[7:]
-        if plan_json.startswith("```"):
-            plan_json = plan_json[3:]
-        if plan_json.endswith("```"):
-            plan_json = plan_json[:-3]
-        plan_json = plan_json.strip()
+        if "```json" in plan_json:
+            plan_json = plan_json.split("```json")[1].split("```")[0].strip()
+        elif "```" in plan_json:
+            plan_json = plan_json.split("```")[1].split("```")[0].strip()
 
-        # 2. Parsear el JSON
+        # 2. Parseo
         try:
             data = json.loads(plan_json)
-        except json.JSONDecodeError:
-            # Fallback por si el LLM envía comillas simples en lugar de dobles
+        except:
             data = json.loads(plan_json.replace("'", '"'))
 
-        # 3. Conexión a la BD
-        conn = get_connection() # Ya incluye el PRAGMA foreign_keys = ON
+        conn = get_connection()
         cursor = conn.cursor()
 
-        # 4. Insertar en la tabla 'planes_escalada'
+        # 3. Insertar Plan
         cursor.execute('''
             INSERT INTO planes_escalada
-              (nombre_plan, fecha, zona_principal, lat, lon,
-               clima, temperatura, viento, dificultad_rango, notas)
+            (nombre_plan, fecha, zona_principal, lat, lon, clima, temperatura, viento, dificultad_rango, notas)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data.get("nombre_plan", "Nuevo Plan"),
-            data.get("fecha", "Sin fecha especificada"),
+            data.get("fecha", "Pendiente"),
             data.get("zona_principal", "Desconocida"),
             data.get("lat"),
             data.get("lon"),
@@ -197,99 +199,82 @@ def guardar_plan_escalada(plan_json: str) -> str:
         ))
         plan_id = cursor.lastrowid
 
-        # 5. Insertar las vías asociadas en 'vias_plan'
+        # 4. Insertar Vías (Manejo robusto de strings o dicts)
         vias = data.get("vias", [])
         for via in vias:
-            # Manejo de fotos (si vienen en lista, convertir a string separado por ;)
-            fotos = via.get("fotos_urls", "")
-            if isinstance(fotos, list):
-                fotos = ";".join(fotos)
-            
+            if isinstance(via, str):
+                # Si el modelo solo envió el nombre de la vía como texto
+                nombre_v, sector_v, dif_v = via, "General", data.get("dificultad_rango", "")
+                lat_v, lon_v = data.get("lat"), data.get("lon")
+            else:
+                # Si el modelo envió el objeto completo
+                nombre_v = via.get("nombre_via", "Vía sin nombre")
+                sector_v = via.get("sector", "")
+                dif_v = via.get("dificultad", "")
+                lat_v = via.get("lat", data.get("lat"))
+                lon_v = via.get("lon", data.get("lon"))
+
             cursor.execute('''
-                INSERT INTO vias_plan
-                  (plan_id, nombre_via, zona, sector, dificultad,
-                   longitud_m, num_chapas, lat, lon,
-                   advertencias, fotos_urls, thecrag_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                plan_id,
-                via.get("nombre_via", "Vía sin nombre"),
-                via.get("zona", data.get("zona_principal", "")),
-                via.get("sector", ""),
-                via.get("dificultad", ""),
-                via.get("longitud_m"),
-                via.get("num_chapas"),
-                via.get("lat"),
-                via.get("lon"),
-                via.get("advertencias", ""),
-                fotos,
-                via.get("url_fuente", via.get("thecrag_url", "")), # Acepta tanto url_fuente como thecrag_url
-            ))
+                INSERT INTO vias_plan (plan_id, nombre_via, zona, sector, dificultad, lat, lon)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (plan_id, nombre_v, data.get("zona_principal"), sector_v, dif_v, lat_v, lon_v))
 
         conn.commit()
         conn.close()
-
-        resumen = f"✅ Plan '{data.get('nombre_plan')}' guardado con éxito (ID: {plan_id})."
-        if vias:
-            resumen += f" Se han registrado {len(vias)} vías para tu salida."
-        
-        return resumen
+        return f"✅ Plan '{data.get('nombre_plan')}' guardado con éxito (ID: {plan_id})."
 
     except Exception as e:
-        return f"❌ Error al guardar el plan en la base de datos: {str(e)}"
+        return f"❌ Error en la base de datos: {str(e)}"
 
 
 # ─────────────────────────────────────────────────────────────
 # TOOL 4: Buscar vías en el CSV local
 # ─────────────────────────────────────────────────────────────
 @tool
-def buscar_vias_local(zona: str) -> str:
+def buscar_vias_local(query: str) -> str:
     """
-    Busca vías de escalada en la base de datos local (CSV) filtrando por zona (crag) o sector.
-    Devuelve las 10 mejores vías de la zona ordenadas por popularidad.
-    Úsala cuando el usuario pregunte por recomendaciones de vías o sectores en España.
-    Tambien puedes ordenarlas por su dificultad.
+    Busca vías de escalada en la base de datos local (CSV).
+    Input: Puede ser solo la zona (ej: "El Chorro") o zona y grado (ej: "El Chorro, 6b").
+    Devuelve las 10 mejores vías que coincidan con la búsqueda.
     """
-    print(zona)
-
-    # 1. Obtenemos la carpeta donde está ESTE archivo (tools.py)
+    # 1. Rutas
     directorio_actual = os.path.dirname(os.path.abspath(__file__))
-    
-    # 2. Construimos la ruta hacia el CSV subiendo un nivel y entrando en RAG
-    # Esto equivale a: Carpeta_Raiz / RAG / archivo.csv
-    ruta_csv = os.path.join(directorio_actual, "..", "RAG", "vias_espania_8anu_limpio.csv")
-    
-    # Normalizamos la ruta (quita los ".." para que sea una ruta limpia)
-    ruta_csv = os.path.normpath(ruta_csv)
+    ruta_csv = os.path.normpath(os.path.join(directorio_actual, "..", "RAG", "vias_espania_8anu_limpio.csv"))
 
     if not os.path.exists(ruta_csv):
-        return "El archivo CSV de vías no existe en el sistema."
+        return "Error: El archivo CSV de vías no existe."
+
+    # 2. Parseo de la query (Zona, Grado)
+    partes = [p.strip() for p in query.split(",")]
+    zona_buscada = partes[0]
+    grado_buscado = partes[1] if len(partes) > 1 else None
 
     try:
-        # Leemos el CSV
         df = pd.read_csv(ruta_csv)
         
-        # Filtramos por la zona (crag) ignorando mayúsculas/minúsculas
-        filtro = df[df['crag'].str.contains(zona, case=False, na=False) | 
-                    df['sector'].str.contains(zona, case=False, na=False)]
+        # Filtro por zona o sector (usamos .copy() para evitar el SettingWithCopyWarning)
+        filtro = df[df['crag'].str.contains(zona_buscada, case=False, na=False) | 
+                    df['sector'].str.contains(zona_buscada, case=False, na=False)].copy()
         
         if filtro.empty:
-            return f"No se encontraron vías locales para la zona o sector '{zona}'."
-        
-        # Limpiamos la columna de ascensos (viene con espacios ej: "1 078") y la pasamos a número
+            return f"No encontré vías en la zona o sector '{zona_buscada}'."
+
+        # Filtro opcional por grado
+        if grado_buscado:
+            filtro = filtro[filtro['grado'].str.contains(grado_buscado, case=False, na=False)]
+            if filtro.empty:
+                return f"No encontré vías de grado '{grado_buscado}' en '{zona_buscada}'."
+
+        # Limpieza de ascensos y ordenación
         filtro['ascensos_num'] = filtro['ascensos'].astype(str).str.replace(' ', '', regex=False).apply(pd.to_numeric, errors='coerce')
-        
-        # Ordenamos para mostrar las más populares primero
         top_vias = filtro.sort_values(by='ascensos_num', ascending=False).head(10)
         
-        # Construimos la respuesta para el bot
-        resumen = f"🧗 Vías más populares encontradas en {zona} (CSV local):\n"
+        resumen = f"🧗 Vías encontradas en {zona_buscada} (Filtrado por '{grado_buscado}' si se especificó):\n"
         for _, row in top_vias.iterrows():
             resumen += (
                 f"- Vía: '{row['nombre']}' | Grado: {row['grado']} | Sector: {row['sector']} | "
                 f"Estrellas: {row['estrellas']} | Lat/Lon: {row['lat']},{row['lon']}\n"
             )
-        
         return resumen
 
     except Exception as e:

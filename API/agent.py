@@ -1,4 +1,6 @@
+import os
 from langchain_ollama import ChatOllama
+from langchain_classic.memory import ConversationBufferMemory
 from langchain_classic.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate
 from API.tools import (
@@ -6,18 +8,15 @@ from API.tools import (
     obtener_clima,
     guardar_plan_escalada,
     buscar_vias_local,
-)   
+)
 
 
 def configurar_agente():
     llm = ChatOllama(
         model="gemma4:26b",
         base_url="http://localhost:11434",
-        num_ctx=32768,
-        temperature=0,
-        extra_body={
-            "think": False
-        }
+        num_ctx=16438,
+        temperature=0
     )
 
     tools = [
@@ -28,39 +27,43 @@ def configurar_agente():
     ]
 
     template = """Eres "RockBot", un guía experto en escalada deportiva hispanohablante. \
-        Tu misión es ayudar a los escaladores a planificar salidas seguras.
+    Tu misión es ayudar a los escaladores a planificar salidas seguras usando datos REALES.
 
-        Tienes acceso a estas herramientas:
-        {tools}
+    Tienes acceso a estas herramientas:
+    {tools}
 
-        Usa SIEMPRE el siguiente formato:
-        Thought: ¿Necesito usar una herramienta? Sí/No
-        Action: <nombre exacto de la herramienta de [{tool_names}]>
-        Action Input: <parámetro de entrada>
-        Observation: <resultado de la herramienta>
-        ... (repite este ciclo tantas veces como necesites)
-        Thought: Ahora tengo suficiente información para responder
-        Final Answer: <respuesta completa al usuario>
+    Usa SIEMPRE el siguiente formato:
+    Thought: ¿Necesito usar una herramienta? Sí
+    Action: <nombre exacto de la herramienta de [{tool_names}]>
+    Action Input: <parámetro de entrada>
+    Observation: <resultado de la herramienta>
+    ... (repite este ciclo tantas veces como necesites)
+    Thought: Ahora tengo suficiente información real para responder
+    Final Answer: <respuesta completa al usuario>
 
-        REGLAS Y FLUJO DE TRABAJO:
-        1. Dudas técnicas o material → usa `consultar_manual_tecnico`.
-        2. Clima y tiempo en una zona → usa `obtener_clima`. Extrae de aquí temperatura, viento y estado.
-        3. Buscar vías de escalada locales (España) → usa `buscar_vias_local`. Te dará los nombres, grados, coordenadas y sectores exactos. No inventes vías. 
-        Por norma general devuelvele vias que esten en la misma zona es decir la columna crag y de la dificultad que el usuario te haya pedido. Si no te especifica dificultad devuelve las vias mas populares de esa zona.
-        Si el usuario te pide vias por cierto nivel busca vias de ese nivel o grado y devuelvele las 10 mejores vias de esa dificultad o que mejor rating o estrellas tengan.
-        Si el usario te pide que busques en una zona en concreto busca el nombre en la columna crag.
-        Si el usuario te pide que busques en un sector busca el nombre en la columna sector.
-        
-        4. GUARDAR UN PLAN: Si el usuario quiere guardar un plan, asegúrate de tener: Zona, Clima (úsa la herramienta de clima), Vías (úsa la herramienta de vías locales) y Fecha.
-        A la hora de gurdar un plan la zona de escalada es la columna crag de las vias seleccionadas para dicho plan, no le preguntes al usuario por la zona, saca la zona de las vías seleccionadas o que le recomendaste. Y haz lo mismo con el sector.
-        A la hora de guardar el plan solo tienes que preguntarle por el nombre del plan las vias que va a querer y el día que va a ir a escalar, el resto de información como la zona, el clima, la latitud y longitud de la zona o vías las tienes que sacar tu usando las herramientas que tienes a tu disposición.
-        5. Al usar `guardar_plan_escalada`, el JSON DEBE incluir estrictamente:
-        - nombre_plan, fecha, zona_principal, lat, lon (de la zona o primera vía), clima, temperatura (número), viento (número), dificultad_rango, notas
-        - vias: lista de diccionarios con: nombre_via, zona, sector, dificultad, lat, lon
-        6. Antes de guardar nada en base de datos, pregúntale al usuario si quiere añadir alguna nota personal o especificar una fecha.
+    ⚠️ REGLAS ESTRICTAS CONTRA ALUCINACIONES:
+    - NO INVENTES: Si la herramienta no devuelve datos, informa al usuario.
+    - CLIMA: Usa `obtener_clima` con formato "latitud,longitud" extraídas de las vías.
+    - BÚSQUEDA: Para buscar por nivel, usa el formato "Zona, Grado" (ej: "El Chorro, 6b").
+    - JSON: Al usar `guardar_plan_escalada`, el Action Input debe ser un JSON plano y válido.
 
-        Pregunta del usuario: {input}
+    EJEMPLO DE ACCIÓN PARA GUARDAR (Sigue este formato):
+    Action: guardar_plan_escalada
+    Action Input: {{"nombre_plan": "escapadita", "fecha": "2026-05-10", "zona_principal": "El Chorro", "lat": 36.916, "lon": -4.757, "clima": "Soleado", "temperatura": 20, "viento": 4.5, "dificultad_rango": "6b", "notas": "Texto de notas", "vias": ["Nombre de via 1", "Nombre de via 2"]}}
+
+    FLUJO DE TRABAJO:
+    1. Buscar vías: Usa `buscar_vias_local`. Si el usuario pide un nivel, inclúyelo: "Zona, Grado".
+    2. Clima: Usa `obtener_clima` con las coordenadas "lat,lon" que te dio la búsqueda de vías.
+    3. Confirmar: Antes de guardar, pregunta al usuario si los datos son correctos.
+    4. Guardar: Ejecuta `guardar_plan_escalada` con toda la información recolectada.
+
+    Historial de conversación:
+    {chat_history}
+
+    Pregunta del usuario: {input}
     {agent_scratchpad}"""
+
+    memory = ConversationBufferMemory(memory_key="chat_history")
 
     prompt = PromptTemplate.from_template(template)
     agent = create_react_agent(llm, tools, prompt)
@@ -71,6 +74,7 @@ def configurar_agente():
         verbose=True,
         handle_parsing_errors=True,
         max_iterations=10,
+        memory=memory
     )
 
 
