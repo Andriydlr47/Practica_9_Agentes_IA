@@ -125,7 +125,7 @@ class Scraper8anu:
             # Bucle de paginación de las CRAGS (Zonas)
             for page_num in range(1, max_pages + 1):
                 url_actual = f"{url_base}?page={page_num}" if page_num > 1 else url_base
-                log.info(f"📄 --- PROCESANDO PÁGINA {page_num} DE ZONAS --- ({url_actual})")
+                log.info(f"--- PROCESANDO PÁGINA {page_num} DE ZONAS --- ({url_actual})")
                 
                 try:
                     # Cambiado de networkidle a domcontentloaded para evitar Timeouts
@@ -139,30 +139,30 @@ class Scraper8anu:
                 links_crags = Parser.extraer_links_crags(html_lista, "https://www.8a.nu")
                 
                 if not links_crags:
-                    log.info("🏁 No se encontraron más zonas. Fin de la paginación principal.")
+                    log.info("No se encontraron más zonas. Fin de la paginación principal.")
                     break
                 
-                log.info(f"✅ {len(links_crags)} zonas reales detectadas en esta página.")
+                log.info(f"{len(links_crags)} zonas reales detectadas en esta página.")
 
                 for i, link in enumerate(links_crags, 1):
                     url_crag_overview = link["url"]
-                    log.info(f"[{i}/{len(links_crags)}] 📍 Zona: {link['nombre']}")
+                    log.info(f"[{i}/{len(links_crags)}] Zona: {link['nombre']}")
                     
                     try:
                         # 1. Extraer Coordenadas
                         await page.goto(url_crag_overview, wait_until="domcontentloaded", timeout=45000)
                         lat, lon = await self.extraer_coordenadas(page)
                         if lat and lon:
-                            log.info(f"   🗺️ Coordenadas: {lat}, {lon}")
+                            log.info(f"Coordenadas: {lat}, {lon}")
                         else:
-                            log.info("   🗺️ Sin coordenadas disponibles.")
+                            log.info("Sin coordenadas disponibles.")
 
                         # 2. Bucle de Paginación para las RUTAS de esta zona
                         page_route = 1
                         while True:
                             url_crag_routes = f"{url_crag_overview}/routes?page={page_route}" if page_route > 1 else f"{url_crag_overview}/routes"
                             
-                            log.info(f"   🧗 Escaneando vías (Página {page_route})...")
+                            log.info(f"Escaneando vías (Página {page_route})...")
                             await page.goto(url_crag_routes, wait_until="domcontentloaded", timeout=45000)
                             
                             try:
@@ -178,15 +178,15 @@ class Scraper8anu:
                             vias_zona_pagina = Parser.desde_html(await page.content(), link['nombre'], lat, lon)
                             
                             if vias_zona_pagina:
-                                log.info(f"      ✨ {len(vias_zona_pagina)} vías extraídas.")
+                                log.info(f"{len(vias_zona_pagina)} vías extraídas.")
                                 self.vias_total.extend(vias_zona_pagina)
                                 page_route += 1 # Pasamos a la siguiente página de rutas
                             else:
-                                log.info(f"   🏁 Fin de vías para {link['nombre']}.")
+                                log.info(f"Fin de vías para {link['nombre']}.")
                                 break # Si el parseador devuelve vacío, rompemos el while
 
                     except Exception as e:
-                        log.error(f"   ❌ Error procesando {link['nombre']}: {e}")
+                        log.error(f"Error procesando {link['nombre']}: {e}")
                     
                     await asyncio.sleep(1) # Pausa por cortesía
 
@@ -202,7 +202,7 @@ class Scraper8anu:
                 writer = csv.DictWriter(f, fieldnames=asdict(self.vias_total[0]).keys())
                 writer.writeheader()
                 for v in self.vias_total: writer.writerow(asdict(v))
-            log.info(f"📊 GUARDADO DE SEGURIDAD: {len(self.vias_total)} vías en {archivo}")
+            log.info(f"GUARDADO DE SEGURIDAD: {len(self.vias_total)} vías en {archivo}")
 
 async def main():
     parser = argparse.ArgumentParser()

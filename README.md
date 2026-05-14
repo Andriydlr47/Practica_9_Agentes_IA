@@ -1,70 +1,109 @@
-# RockBot Planner 🧗
+# RockBot Planner 🧗 - Guía de Escalada Inteligente
 
-**RockBot Planner** es una aplicación inteligente (Agente IA) diseñada para ayudar a los escaladores deportivos a planificar salidas seguras. Este proyecto permite conversar con un guía experto (RockBot), consultar información meteorológica y manuales técnicos, buscar vías de escalada y crear planes interactivos que se visualizan en un mapa interactivo en la interfaz.
+**RockBot Planner** es un ecosistema inteligente diseñado para ayudar a escaladores deportivos en España a planificar sus salidas de forma segura y eficiente. Utiliza un **Agente de IA** con arquitectura **ReAct** (Reasoning + Acting) para integrar datos de diversas fuentes, desde manuales técnicos en PDF hasta datos meteorológicos en tiempo real y bases de datos de vías de escalada.
 
-## Características Principales
+## 🏗️ Arquitectura del Proyecto
 
-*   **Agente Conversacional (RockBot)**: Construido con Langchain y un modelo LLM local a través de Ollama. Implementa un ciclo **ReAct** (Reasoning + Acting) para decidir qué herramientas usar.
-*   **Robustez y Manejo de Errores**: El sistema incluye lógica personalizada para recuperar respuestas en caso de errores de formato del modelo (Parsing Errors), garantizando una experiencia de usuario fluida.
-*   **Búsqueda RAG (Retrieval-Augmented Generation)**: Capacidad para consultar un manual técnico local extraído de PDFs y webs scrapeadas almacenado en ChromaDB.
-*   **Consulta del Clima**: Obtiene información meteorológica en tiempo real usando la API de OpenWeather.
-*   **Planes de Escalada**: Generación y almacenamiento local en SQLite de planes con coordenadas, dificultad de vías, notas y estado meteorológico.
-*   **Interfaz Moderna**: Aplicación React interactiva con paneles dedicados para el mapa (Leaflet), los planes guardados y un **chat con historial persistente** (localStorage).
+```mermaid
+graph TD
+    User([Usuario]) <--> CLI[Chat CLI / Interface]
+    CLI <--> API[FastAPI Backend]
+    
+    subgraph "Agente IA (LangChain)"
+        API <--> Agent[RockBot Agent]
+        Agent <--> Tools[Herramientas]
+    end
+    
+    subgraph "Fuentes de Datos"
+        Tools --> RAG[RAG: ChromaDB + PDFs]
+        Tools --> Weather[OpenWeatherMap API]
+        Tools --> SQLite[(SQLite: Planes)]
+        Tools --> CSV[(CSV: Vías 8a.nu)]
+    end
+    
+    subgraph "Ingestión de Datos"
+        Scraper[8a.nu Scraper] --> CSV
+        PDFs[Manuales PDF] --> Ingestion[Ingestion Script]
+        Ingestion --> RAG
+    end
+```
 
-## Requisitos Previos
+## 🚀 Características Principales
 
-Antes de ejecutar la aplicación, asegúrate de tener instalados:
+- **Agente LangChain ReAct**: Utiliza `gemma4:26b` local vía Ollama para razonar y ejecutar herramientas.
+- **RAG Personalizado**: Indexación de manuales técnicos de escalada en una base de datos vectorial (ChromaDB) para consultas de seguridad y técnica.
+- **Web Scraping Avanzado**: Extracción de datos de miles de vías en España desde `8a.nu` mediante Playwright.
+- **Planificación Dinámica**: Generación de itinerarios que incluyen pronóstico del tiempo a 5 días y coordenadas precisas.
+- **Visualización en Mapa**: Interfaz React con paneles interactivos y mapa Leaflet para visualizar destinos de escalada.
 
-*   [Python 3.9 o superior](https://www.python.org/)
-*   [Node.js](https://nodejs.org/) (v18+)
-*   [Ollama](https://ollama.com/) con los modelos:
-    *   LLM: `gemma4:26b` (o el configurado en `API/agent.py`)
-    *   Embeddings: `mxbai-embed-large` (para el sistema RAG)
+## 🛠️ Requisitos Previos
 
-## Configuración del Entorno
+- **Python 3.9+**
+- **Node.js v18+**
+- **Ollama** con los siguientes modelos:
+  - `gemma4:26b` (LLM de razonamiento)
+  - `mxbai-embed-large` (Embeddings para RAG)
+- **API Key** de OpenWeatherMap.
 
-1.  **Clonar el repositorio**.
-2.  **Configurar Variables de Env**:
-    Crea un archivo `.env` en la raíz del proyecto:
-    ```env
-    OPENWEATHER_API_KEY=tu_api_key_aqui
-    ```
+## ⚙️ Configuración e Instalación
 
-## Ejecución del Proyecto
-
-### 1. Iniciar el Backend (FastAPI)
-
+### 1. Clonar y preparar el entorno
 ```bash
-# Instalar dependencias de Python
-pip install -r requirements.txt
+git clone <url-del-repo>
+cd Practica_9_Agentes_IA
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+```
 
-# Ejecutar el servidor
+### 2. Instalar dependencias
+```bash
+pip install -r requirements.txt
+playwright install chromium
+```
+
+### 3. Configurar variables de entorno
+Crea un archivo `.env` en la raíz:
+```env
+OPENWEATHER_API_KEY=tu_api_key_aqui
+```
+
+### 4. Preparar los datos (Opcional si ya están incluidos)
+```bash
+# Para scrapear nuevas vías (8a.nu)
+python -m RAG.scraper --url "https://www.8a.nu/crags/sportclimbing/spain"
+
+# Para indexar manuales PDF en ChromaDB
+python -m RAG.ingestion
+```
+
+## 🏃 Ejecución
+
+### Backend (Servidor API)
+```bash
 python -m API.main
 ```
-> El backend corre en `http://localhost:8000`. Incluye manejo avanzado de errores de agente para evitar fallos por alucinaciones de formato.
+El servidor estará disponible en `http://localhost:8000`.
 
-### 2. Iniciar el Frontend (React / Vite)
-
+### Frontend (Interfaz Web)
 ```bash
 cd frontend
-# Instalar dependencias de Node
 npm install
-# Iniciar desarrollo
 npm run dev
 ```
-> La interfaz se abrirá en `http://localhost:5173`.
+Accede a `http://localhost:5173`.
 
-## Uso de la Aplicación
+### Cliente de Chat (CLI rápido)
+Si prefieres interactuar sin la interfaz web:
+```bash
+python chat.py
+```
 
-1.  **Conversación**: Pregunta sobre zonas de escalada o técnicas. El agente buscará en el manual local o en el CSV de vías.
-2.  **Clima**: Solicita el clima de una zona específica. RockBot extraerá las coordenadas y consultará la API.
-3.  **Gestión de Planes**: Una vez decidas las vías, pide "Guarda este plan". El plan aparecerá automáticamente en el panel derecho y se marcará en el mapa.
-4.  **Persistencia**: Puedes cerrar el navegador; tus planes están en SQLite y tu chat en localStorage.
+## 📂 Estructura del Proyecto
 
-## Estructura del Proyecto
+- `API/`: Lógica central del sistema, definición del agente, herramientas y persistencia SQLite.
+- `RAG/`: Scripts de scraping (`scraper.py`), ingestión de documentos (`ingestion.py`) y archivos de datos.
+- `frontend/`: Aplicación React completa con gestión de estado y visualización geográfica.
+- `chroma_db/`: Almacenamiento persistente de los vectores de embeddings.
 
-*   `/API/`: Backend FastAPI, lógica del agente (`agent.py`), herramientas (`tools.py`) y base de datos SQLite.
-*   `/RAG/`: Sistema de ingestión de documentos y base de datos vectorial ChromaDB.
-*   `/frontend/`: Interfaz React con Leaflet y componentes interactivos.
-
-¡Disfruta de tus escaladas de forma segura con RockBot! 🧗‍♂️
+---
+*Desarrollado como parte de la Práctica IX de Agentes de IA.*

@@ -65,7 +65,7 @@ def cargar_pdfs():
         collection_name=COLLECTION_NAME
     )
     
-    print(f"\n✅ BASE DE DATOS CREADA EXITOSAMENTE CON LOS PDFS")
+    print(f"\nBASE DE DATOS CREADA EXITOSAMENTE CON LOS PDFS")
 
 if __name__ == "__main__":
     cargar_pdfs()

@@ -35,9 +35,8 @@ def _metadatos_seguros(metadata: dict) -> dict:
         else: clean[k] = str(v)
     return clean
 
-# ─────────────────────────────────────────────────────────────
 # TOOL 1: Consultar manual técnico (RAG)
-# ─────────────────────────────────────────────────────────────
+
 @tool
 def consultar_manual_tecnico(query: str) -> str:
     """
@@ -53,9 +52,8 @@ def consultar_manual_tecnico(query: str) -> str:
         return f"Error al consultar el manual local: {str(e)}"
 
 
-# ─────────────────────────────────────────────────────────────
 # TOOL 2: Obtener clima (actual + pronóstico 5 días)
-# ─────────────────────────────────────────────────────────────
+
 @tool
 def obtener_clima(coordenadas: str) -> str:
     """
@@ -84,7 +82,7 @@ def obtener_clima(coordenadas: str) -> str:
     )
 
     try:
-        # ── Clima actual ──────────────────────────────────────
+        # Clima actual 
         r = requests.get(url_actual, timeout=10)
         data = r.json()
         
@@ -119,7 +117,7 @@ def obtener_clima(coordenadas: str) -> str:
         else:
             resumen += "\n✅ Condiciones favorables para escalar."
 
-        # ── Pronóstico ────────────────────────────────────────
+        # Pronóstico 
         r2 = requests.get(url_forecast, timeout=10)
         fc = r2.json()
         if str(fc.get("cod")) == "200":
@@ -155,127 +153,117 @@ def obtener_clima(coordenadas: str) -> str:
         return f"Error de conexión con el servicio meteorológico: {str(e)}"
 
 
-# ─────────────────────────────────────────────────────────────
 # TOOL 3: Guardar plan de escalada en BD
-# ─────────────────────────────────────────────────────────────
+
 @tool
 def guardar_plan_escalada(plan_json: str) -> str:
     """
-    Guarda un plan de escalada completo. El input debe ser un JSON string.
+    Guarda un plan de escalada completo en la base de datos SQL.
+    El input DEBE ser un string JSON válido con los datos del plan y las vías.
     """
     try:
-        # 1. Limpieza de markdown
+        # 1. Limpieza de posibles etiquetas de Markdown que el LLM a veces incluye
         plan_json = plan_json.strip()
         if "```json" in plan_json:
             plan_json = plan_json.split("```json")[1].split("```")[0].strip()
         elif "```" in plan_json:
             plan_json = plan_json.split("```")[1].split("```")[0].strip()
 
-        # 2. Parseo
+        # 2. Parseo del JSON a diccionario
         try:
             data = json.loads(plan_json)
-        except:
+        except json.JSONDecodeError:
+            # Reintento simple por si hay comillas simples
             data = json.loads(plan_json.replace("'", '"'))
 
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        # 3. Insertar Plan
-        cursor.execute('''
-            INSERT INTO planes_escalada
-            (nombre_plan, fecha, zona_principal, lat, lon, clima, temperatura, viento, dificultad_rango, notas)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            data.get("nombre_plan", "Nuevo Plan"),
-            data.get("fecha", "Pendiente"),
-            data.get("zona_principal", "Desconocida"),
-            data.get("lat"),
-            data.get("lon"),
-            data.get("clima", ""),
-            data.get("temperatura"),
-            data.get("viento"),
-            data.get("dificultad_rango", ""),
-            data.get("notas", ""),
-        ))
-        plan_id = cursor.lastrowid
-
-        # 4. Insertar Vías (Manejo robusto de strings o dicts)
+        # 3. Preparar los datos para la inserción
+        # Extraemos información de la primera vía si no viene en el root del JSON
         vias = data.get("vias", [])
-        for via in vias:
-            if isinstance(via, str):
-                # Si el modelo solo envió el nombre de la vía como texto
-                nombre_v, sector_v, dif_v = via, "General", data.get("dificultad_rango", "")
-                lat_v, lon_v = data.get("lat"), data.get("lon")
-            else:
-                # Si el modelo envió el objeto completo
-                nombre_v = via.get("nombre_via", "Vía sin nombre")
-                sector_v = via.get("sector", "")
-                dif_v = via.get("dificultad", "")
-                lat_v = via.get("lat", data.get("lat"))
-                lon_v = via.get("lon", data.get("lon"))
+        
+        # Intentamos autorellenar ciudad/comunidad si no vienen en el root pero sí en las vías
+        if not data.get("comunidad_autonoma") and len(vias) > 0 and isinstance(vias[0], dict):
+            data["comunidad_autonoma"] = vias[0].get("comunidad_autonoma", "")
+        if not data.get("ciudad") and len(vias) > 0 and isinstance(vias[0], dict):
+            data["ciudad"] = vias[0].get("ciudad", "")
 
-            cursor.execute('''
-                INSERT INTO vias_plan (plan_id, nombre_via, zona, sector, dificultad, lat, lon)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (plan_id, nombre_v, data.get("zona_principal"), sector_v, dif_v, lat_v, lon_v))
-
-        conn.commit()
-        conn.close()
-        return f"✅ Plan '{data.get('nombre_plan')}' guardado con éxito (ID: {plan_id})."
+        # 4. Llamada a la lógica de base de datos (importada de database.py)
+        # Esta función ya maneja la apertura/cierre de conexión y la transacción
+        resultado = insertar_plan_completo(data)
+        
+        return resultado
 
     except Exception as e:
-        return f"❌ Error en la base de datos: {str(e)}"
+        return f"Error crítico al intentar guardar el plan: {str(e)}"
 
 
-# ─────────────────────────────────────────────────────────────
 # TOOL 4: Buscar vías en el CSV local
-# ─────────────────────────────────────────────────────────────
+
 @tool
 def buscar_vias_local(query: str) -> str:
     """
     Busca vías de escalada en la base de datos local (CSV).
-    Input: Puede ser solo la zona (ej: "El Chorro") o zona y grado (ej: "El Chorro, 6b").
-    Devuelve las 10 mejores vías que coincidan con la búsqueda.
+    Input: "Lugar, Grado" (ej: "Aragón, 6a" o "Málaga, 5c"). 
+    El 'Lugar' puede ser una Comunidad Autónoma, Ciudad, Zona (Crag) o Sector.
     """
     # 1. Rutas
     directorio_actual = os.path.dirname(os.path.abspath(__file__))
     ruta_csv = os.path.normpath(os.path.join(directorio_actual, "..", "RAG", "vias_espania_8anu_limpio.csv"))
 
     if not os.path.exists(ruta_csv):
-        return "Error: El archivo CSV de vías no existe."
+        return "Error: El archivo CSV de vías no existe. Ejecuta el notebook de limpieza primero."
 
-    # 2. Parseo de la query (Zona, Grado)
+    # 2. Parseo de la query (Lugar, Grado)
     partes = [p.strip() for p in query.split(",")]
-    zona_buscada = partes[0]
+    lugar_buscado = partes[0]
     grado_buscado = partes[1] if len(partes) > 1 else None
 
     try:
         df = pd.read_csv(ruta_csv)
         
-        # Filtro por zona o sector (usamos .copy() para evitar el SettingWithCopyWarning)
-        filtro = df[df['crag'].str.contains(zona_buscada, case=False, na=False) | 
-                    df['sector'].str.contains(zona_buscada, case=False, na=False)].copy()
+        # --- LÓGICA DE PRIORIDAD GEOGRÁFICA ---
+        
+        # Prioridad 1: Coincidencia en ubicación REAL (Comunidad Autónoma o Ciudad)
+        filtro_geo = df[
+            df['comunidad_autonoma'].str.contains(lugar_buscado, case=False, na=False) |
+            df['ciudad'].str.contains(lugar_buscado, case=False, na=False)
+        ].copy()
+
+        # Prioridad 2: Coincidencia en nombre del sitio (Crag o Sector)
+        filtro_nombre = df[
+            df['crag'].str.contains(lugar_buscado, case=False, na=False) |
+            df['sector'].str.contains(lugar_buscado, case=False, na=False)
+        ].copy()
+
+        # Combinamos: Los de la región real van PRIMERO. 
+        # drop_duplicates() elimina los que coincidan en ambos filtros.
+        filtro = pd.concat([filtro_geo, filtro_nombre]).drop_duplicates().reset_index(drop=True)
         
         if filtro.empty:
-            return f"No encontré vías en la zona o sector '{zona_buscada}'."
+            return f"No encontré resultados para el lugar: '{lugar_buscado}'."
 
-        # Filtro opcional por grado
+        # 3. Filtro opcional por grado (sobre los resultados ya priorizados)
         if grado_buscado:
             filtro = filtro[filtro['grado'].str.contains(grado_buscado, case=False, na=False)]
             if filtro.empty:
-                return f"No encontré vías de grado '{grado_buscado}' en '{zona_buscada}'."
+                return f"No encontré vías de grado '{grado_buscado}' en '{lugar_buscado}'."
 
-        # Limpieza de ascensos y ordenación
-        filtro['ascensos_num'] = filtro['ascensos'].astype(str).str.replace(' ', '', regex=False).apply(pd.to_numeric, errors='coerce')
-        top_vias = filtro.sort_values(by='ascensos_num', ascending=False).head(10)
+        # 4. Limpieza de ascensos para ordenar las mejores dentro de la selección
+        filtro['ascensos_num'] = pd.to_numeric(filtro['ascensos'].astype(str).str.replace(' ', ''), errors='coerce')
         
-        resumen = f"🧗 Vías encontradas en {zona_buscada} (Filtrado por '{grado_buscado}' si se especificó):\n"
+        # Tomamos las 15 primeras. Al haber concatenado antes el filtro_geo, 
+        # las de la comunidad autónoma correcta saldrán arriba.
+        top_vias = filtro.head(15)
+        
+        # 5. Formatear respuesta
+        resumen = f"🧗 Vías encontradas en '{lugar_buscado}':\n"
         for _, row in top_vias.iterrows():
+            # Mostramos explícitamente Ciudad y CCAA para que el Agente sepa dónde está cada cosa
             resumen += (
-                f"- Vía: '{row['nombre']}' | Grado: {row['grado']} | Sector: {row['sector']} | "
+                f"- Vía: '{row['nombre']}' | Grado: {row['grado']} | "
+                f"Ubicación: {row['sector']} ({row['crag']}), {row['ciudad']}, {row['comunidad_autonoma']} | "
                 f"Estrellas: {row['estrellas']} | Lat/Lon: {row['lat']},{row['lon']}\n"
             )
         return resumen
 
     except Exception as e:
-        return f"Error al procesar el CSV local: {str(e)}"
+        return f"Error al procesar la búsqueda local: {str(e)}"

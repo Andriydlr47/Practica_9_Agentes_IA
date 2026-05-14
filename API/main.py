@@ -22,7 +22,7 @@ app = FastAPI(
     version="2.0.0",
 )
 
-# ── CORS ──────────────────────────────────────────────────────
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,12 +31,12 @@ app.add_middleware(
 )
 
 
-# ── Modelos ───────────────────────────────────────────────────
+# Modelos
 class ChatRequest(BaseModel):
     message: str
 
 
-# ── Endpoints ─────────────────────────────────────────────────
+# Endpoints
 
 @app.get("/", tags=["General"])
 def read_root():

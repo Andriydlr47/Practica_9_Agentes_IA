@@ -7,7 +7,7 @@ print("RockBot - Guía de Escalada (escribe 'salir' para terminar)\n")
 while True:
     mensaje = input("Tú: ").strip()
     if mensaje.lower() in ("salir", "exit", "quit"):
-        print("¡Hasta la próxima escalador! 🪨")
+        print("¡Hasta la próxima escalador!")
         break
     if not mensaje:
         continue

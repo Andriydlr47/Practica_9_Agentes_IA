@@ -15,7 +15,7 @@ def configurar_agente():
     llm = ChatOllama(
         model="gemma4:26b",
         base_url="http://localhost:11434",
-        num_ctx=16438,
+        num_ctx=32768,
         temperature=0
     )
 
@@ -32,37 +32,42 @@ def configurar_agente():
     Tienes acceso a estas herramientas:
     {tools}
 
-    Usa SIEMPRE el siguiente formato EXACTO (no te saltes ninguna palabra clave):
+    Usa SIEMPRE el siguiente formato EXACTO:
     Thought: ¿Necesito usar una herramienta? Sí
     Action: <nombre exacto de la herramienta de [{tool_names}]>
     Action Input: <parámetro de entrada>
     Observation: <resultado de la herramienta>
-    ... (repite este ciclo tantas veces como necesites)
+    ... (repite este ciclo)
     Thought: Ahora tengo suficiente información real para responder
     Final Answer: <respuesta completa al usuario>
 
-    ⚠️ REGLAS ESTRICTAS DE FORMATO:
-    - NUNCA respondas directamente al usuario. Siempre debes empezar tu respuesta final con "Final Answer: ".
-    - NUNCA inventes herramientas.
-    - CLIMA: Usa `obtener_clima` con formato "latitud,longitud" extraídas de las vías.
-    - BÚSQUEDA: Para buscar por nivel, usa el formato "Zona, Grado" (ej: "El Chorro, 6b").
-    - JSON: Al usar `guardar_plan_escalada`, el Action Input debe ser un JSON plano y válido.
+    REGLAS DE BÚSQUEDA GEOGRÁFICA (JERARQUÍA):
+    Al buscar vías con `buscar_vias_local`, sigue este orden de prioridad:
+    1. **Comunidad Autónoma:** Si el usuario menciona una región (ej: Aragón, Andalucía, Madrid, Cataluña), busca primero por ese nombre, ten en cuenta que están guardados en ingles pero tu tienes que mostrarlos en español.
+    2. **Ciudad/Provincia:** Si no hay resultados o pide algo más específico, busca por ciudad (ej: Huesca, Málaga).
+    3. **Zona/Sector:** Solo busca por nombre de sector (ej: "El chorro") si el usuario es muy específico o si las búsquedas anteriores fallaron.
+    
+    *Nota: Evita confundir sectores que contienen el nombre de una región con la región misma. Si buscas "Aragón", prioriza resultados en la Comunidad Autónoma de Aragón.*
 
-    EJEMPLO DE ACCIÓN PARA GUARDAR (Sigue este formato):
-    Action: guardar_plan_escalada
-    Action Input: {{"nombre_plan": "escapadita", "fecha": "2026-05-10", "zona_principal": "El Chorro", "lat": 36.916, "lon": -4.757, "clima": "Soleado", "temperatura": 20, "viento": 4.5, "dificultad_rango": "6b", "notas": "Texto de notas", "vias": ["Nombre de via 1", "Nombre de via 2"]}}
+    REGLAS DE FORMATO:
+    - NUNCA respondas directamente sin usar "Final Answer: ".
+    - CLIMA: Usa `obtener_clima` con formato "lat,lon" (extraídas de las vías encontradas).
+    - BÚSQUEDA: Formato "Lugar, Grado". Ejemplo: "Aragón, 5".
+    - JSON: `guardar_plan_escalada` requiere un JSON plano y válido.
 
     FLUJO DE TRABAJO:
-    1. Buscar vías: Usa `buscar_vias_local`. Si el usuario pide un nivel, inclúyelo: "Zona, Grado".
-    2. Clima: Usa `obtener_clima` con las coordenadas "lat,lon" que te dio la búsqueda de vías.
-    3. Confirmar: Antes de guardar, pregunta al usuario si los datos son correctos.
-    4. Guardar: Ejecuta `guardar_plan_escalada` con toda la información recolectada.
+    1. Buscar vías siguiendo la jerarquía geográfica.
+    2. Obtener Clima de la ubicación real de esas vías.
+    3. Confirmar con el usuario y guardar.
 
-    Historial de conversación:
+    Historial:
     {chat_history}
 
     Pregunta del usuario: {input}
     {agent_scratchpad}"""
+
+
+
 
     memory = ConversationBufferMemory(memory_key="chat_history")
 
@@ -73,7 +78,6 @@ def configurar_agente():
         agent=agent,
         tools=tools,
         verbose=True,
-        # Cambiamos True por un mensaje correctivo:
         handle_parsing_errors="Error de formato. NUNCA respondas directamente. Debes usar 'Final Answer: <tu respuesta>' o 'Action: <herramienta>'.", 
         max_iterations=10,
         memory=memory
