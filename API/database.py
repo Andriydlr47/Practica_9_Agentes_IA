@@ -63,21 +63,34 @@ def insertar_plan_completo(datos):
                 lat, lon, clima, temperatura, viento, dificultad_rango, notas
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            datos.get('nombre_plan'), datos.get('fecha'), datos.get('zona_principal'),
-            datos.get('comunidad_autonoma'), datos.get('ciudad'),
-            datos.get('lat'), datos.get('lon'), datos.get('clima'),
-            datos.get('temperatura'), datos.get('viento'),
-            datos.get('dificultad_rango'), datos.get('notas')
+            datos.get('nombre_plan'),
+            datos.get('fecha'),
+            datos.get('zona_principal'),
+            datos.get('comunidad_autonoma'),
+            datos.get('ciudad'),
+            datos.get('lat'),
+            datos.get('lon'),
+            datos.get('clima'),
+            datos.get('temperatura'),
+            datos.get('viento'),
+            datos.get('dificultad_rango'),
+            datos.get('notas') or datos.get('nota'),
         ))
         
         plan_id = cursor.lastrowid
-        vias = datos.get('vias', [])
-        for via in vias:
+        for via in datos.get('vias', []):
             cursor.execute("""
                 INSERT INTO vias_plan (plan_id, nombre_via, zona, sector, dificultad, lat, lon)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (plan_id, via.get('nombre_via'), via.get('zona'), via.get('sector'), 
-                  via.get('dificultad'), via.get('lat'), via.get('lon')))
+            """, (
+                plan_id,
+                via.get('nombre_via'),
+                via.get('zona'),
+                via.get('sector'),
+                via.get('dificultad') or via.get('grado'),
+                via.get('lat'),
+                via.get('lon'),
+            ))
         
         conn.commit()
         return f"Éxito: Plan guardado con ID {plan_id}."

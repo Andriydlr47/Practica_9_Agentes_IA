@@ -55,6 +55,19 @@ def configurar_agente():
     - BÚSQUEDA: Formato "Lugar, Grado". Ejemplo: "Aragón, 5".
     - JSON: `guardar_plan_escalada` requiere un JSON plano y válido.
 
+    REGLA CRÍTICA ANTES DE GUARDAR:
+    NUNCA uses `guardar_plan_escalada` sin haber ejecutado antes estos pasos:
+    1. `buscar_vias_local` → obtener lat/lon de las vías.
+    2. `obtener_clima` → obtener clima, temperatura y viento con esas coordenadas.
+    3. Confirmar con el usuario la selección final.
+    
+    El JSON para guardar DEBE incluir SIEMPRE estos campos obtenidos en los pasos anteriores:
+    - lat, lon (de las vías encontradas)
+    - clima, temperatura, viento (del paso 2)
+    - comunidad_autonoma, ciudad
+    - En cada vía: nombre_via, sector, dificultad (NO usar 'grado', usar 'dificultad')
+    - notas (NO usar 'nota', usar 'notas')
+
     FLUJO DE TRABAJO:
     1. Buscar vías siguiendo la jerarquía geográfica.
     2. Obtener Clima de la ubicación real de esas vías.

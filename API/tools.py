@@ -153,8 +153,6 @@ def obtener_clima(coordenadas: str) -> str:
         return f"Error de conexión con el servicio meteorológico: {str(e)}"
 
 
-# TOOL 3: Guardar plan de escalada en BD
-
 @tool
 def guardar_plan_escalada(plan_json: str) -> str:
     """
@@ -173,28 +171,71 @@ def guardar_plan_escalada(plan_json: str) -> str:
         try:
             data = json.loads(plan_json)
         except json.JSONDecodeError:
-            # Reintento simple por si hay comillas simples
             data = json.loads(plan_json.replace("'", '"'))
 
-        # 3. Preparar los datos para la inserción
-        # Extraemos información de la primera vía si no viene en el root del JSON
         vias = data.get("vias", [])
-        
-        # Intentamos autorellenar ciudad/comunidad si no vienen en el root pero sí en las vías
-        if not data.get("comunidad_autonoma") and len(vias) > 0 and isinstance(vias[0], dict):
-            data["comunidad_autonoma"] = vias[0].get("comunidad_autonoma", "")
-        if not data.get("ciudad") and len(vias) > 0 and isinstance(vias[0], dict):
-            data["ciudad"] = vias[0].get("ciudad", "")
+        primera_via = vias[0] if vias and isinstance(vias[0], dict) else {}
 
-        # 4. Llamada a la lógica de base de datos (importada de database.py)
-        # Esta función ya maneja la apertura/cierre de conexión y la transacción
+        # ── Normalización de aliases en el plan raíz ──────────────────────────
+
+        # 'nota' → 'notas'
+        if not data.get("notas") and data.get("nota"):
+            data["notas"] = data.pop("nota")
+
+        # Autorellenar ciudad/comunidad desde la primera vía si no vienen en el root
+        if not data.get("comunidad_autonoma"):
+            data["comunidad_autonoma"] = primera_via.get("comunidad_autonoma", "")
+        if not data.get("ciudad"):
+            data["ciudad"] = primera_via.get("ciudad", "")
+
+        # Autorellenar lat/lon desde la primera vía si no vienen en el root
+        if not data.get("lat") and primera_via.get("lat"):
+            data["lat"] = primera_via.get("lat")
+        if not data.get("lon") and primera_via.get("lon"):
+            data["lon"] = primera_via.get("lon")
+
+        # temperatura string → float  ("14-16°C" → 15.0,  "17.88°C" → 17.88)
+        temp_raw = data.get("temperatura")
+        if isinstance(temp_raw, str):
+            numeros = re.findall(r"[\d.]+", temp_raw)
+            if len(numeros) >= 2:
+                data["temperatura"] = (float(numeros[0]) + float(numeros[1])) / 2
+            elif len(numeros) == 1:
+                data["temperatura"] = float(numeros[0])
+
+        # viento string → float  ("6.69 m/s" → 6.69)
+        viento_raw = data.get("viento")
+        if isinstance(viento_raw, str):
+            numeros = re.findall(r"[\d.]+", viento_raw)
+            if numeros:
+                data["viento"] = float(numeros[0])
+
+        # dificultad_rango auto-generado desde las vías si no viene en el root
+        if not data.get("dificultad_rango") and vias:
+            dificultades = [v.get("dificultad") or v.get("grado", "") for v in vias if isinstance(v, dict)]
+            dificultades = [d for d in dificultades if d]
+            if dificultades:
+                unicas = sorted(set(dificultades))
+                data["dificultad_rango"] = f"{unicas[0]} - {unicas[-1]}" if len(unicas) > 1 else unicas[0]
+
+        # ── Normalización de aliases en cada vía ──────────────────────────────
+
+        for via in vias:
+            if not isinstance(via, dict):
+                continue
+            # 'grado' → 'dificultad'
+            if not via.get("dificultad") and via.get("grado"):
+                via["dificultad"] = via.pop("grado")
+            # 'nombre' → 'nombre_via'
+            if not via.get("nombre_via") and via.get("nombre"):
+                via["nombre_via"] = via.pop("nombre")
+
+        # 3. Llamada a la lógica de base de datos
         resultado = insertar_plan_completo(data)
-        
         return resultado
 
     except Exception as e:
         return f"Error crítico al intentar guardar el plan: {str(e)}"
-
 
 # TOOL 4: Buscar vías en el CSV local
 
